@@ -80,6 +80,29 @@ class query_ast_visitor(ast.NodeVisitor):
         attr_name = call_node.attr 
         self._result = attr_name
 
+    def visit_BinOp(self, node):
+        if type(node.left) is ast.Attribute:
+            lhs = node.left.attr
+        elif type(node.left) is ast.Num:
+            lhs = node.left.n
+
+        if type(node.right) is ast.Attribute:
+            rhs = node.right.attr
+        elif type(node.right) is ast.Num:
+            rhs = node.right.n
+
+
+        if type(node.op) is ast.Add:
+            r = str(lhs) + "+" +  str(rhs)
+        elif type(node.op) is ast.Div:
+            r = str(lhs) + "/" +  str(rhs)
+        else:
+            raise BaseException("Binary operator {0} is not implemented.".format(type(node.op)))
+
+        # Cache the result to push it back further up.
+        self._result = r
+
+
     def visit_Name(self, name_node):
         'Visiting a name - which should represent something'
         name_node.rep = self.resolve_id(name_node.id)
@@ -208,6 +231,7 @@ class ntup_executor:
             newCol = defn
             newCol = newCol.replace("/", "O")
             newCol = newCol.replace(".0", "")
+            newCol = newCol.replace("+", "Plus")
 
             file = file.Define(newCol,defn)
             colNames.push_back(newCol)

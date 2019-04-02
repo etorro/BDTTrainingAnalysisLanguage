@@ -2,6 +2,7 @@
 from numpylib.NumpyArrayStream import NumpyArrayStream
 from awkwardlib.AwkwardArrayStream import AwkwardArrayStream
 from xAODlib.AtlasEventStream import AtlasEventStream
+from RDFlib.RDFEventStream import RDFEventStream
 
 # Bring in all the machinery to process xAOD files. This adds
 # extra stuff to the processing engine to special case things.
@@ -29,3 +30,11 @@ class EventDataSet:
         This should be an extension function, not on the EventDataSet which should be "neutral".
         """
         return AtlasEventStream(self)
+
+    def AsRDFEvents(self):
+        r"""
+        Returns a stream of events that knows it will have to run in an RDataFrame environment.
+
+        This should be an extension function, not on the EventDataSet which should be "neutral".
+        """
+        return RDFEventStream(self)
