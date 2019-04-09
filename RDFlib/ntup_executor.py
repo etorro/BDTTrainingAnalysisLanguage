@@ -78,35 +78,46 @@ class query_ast_visitor(ast.NodeVisitor):
         # method name we are going to be calling against.
         calling_against = self.get_rep(call_node.value) 
         attr_name = call_node.attr 
+        call_node.rep =attr_name 
         self._result = attr_name
 
     def visit_BinOp(self, node):
-        if type(node.left) is ast.Attribute:
-            lhs = node.left.attr
-        elif type(node.left) is ast.Num:
-            lhs = node.left.n
-
-        if type(node.right) is ast.Attribute:
-            rhs = node.right.attr
-        elif type(node.right) is ast.Num:
-            rhs = node.right.n
-
-
+        lhs = self.get_rep(node.left)
+        rhs = self.get_rep(node.right)
+        
         if type(node.op) is ast.Add:
-            r = str(lhs) + "+" +  str(rhs)
+            r = str(lhs) + "+" +  str(rhs) 
         elif type(node.op) is ast.Div:
             r = str(lhs) + "/" +  str(rhs)
+        elif type(node.op) is ast.Gt:
+            r = str(lhs) + ">" +  str(rhs)    
         else:
             raise BaseException("Binary operator {0} is not implemented.".format(type(node.op)))
 
         # Cache the result to push it back further up.
         self._result = r
 
+    def visit_Num(self, node):
+        node.rep = node.n
+        self._result = node.rep
+
+    def visit_Str(self, node):
+        node.rep = node.s
+        self._result = node.rep
 
     def visit_Name(self, name_node):
         'Visiting a name - which should represent something'
         name_node.rep = self.resolve_id(name_node.id)
 
+    def visit_Compare(self, node):
+        ops = node.ops
+        comps = node.comparators
+
+        # simplest case: one single comparison
+        if len(comps) == 1:
+            op = ops[0]
+            binop = ast.BinOp(op=op, left=node.left, right=comps[0])
+            return self.visit(binop)
 
     def visit_Call(self, call_node):
         r'''
@@ -218,22 +229,37 @@ class ntup_executor:
         # defNames contains the names of new branches to be Defined in RDF
         colNames = ROOT.std.vector("string")()
         defNames = ROOT.std.vector("string")()
- 
-        for col in file.GetColumnNames():
-            if col == ast_node.rep:
-                colNames.push_back(ast_node.rep)
-                
-        if (len(colNames)==0):
-            defNames.push_back(ast_node.rep)
 
-        output_file = "skimmed.root"    
+        list = (ast_node.rep,)
+        if type(ast_node.rep)==tuple:
+            list=ast_node.rep
+    
+        for var in list:    
+            existingVar = 0
+            for col in file.GetColumnNames():
+                if col == var:
+                    existingVar = 1
+                    colNames.push_back(var)
+            if existingVar==0:
+                defNames.push_back(var)
+
+        output_file = "skimmed.root"   
+        doFilter=False
         for defn in defNames:
             newCol = defn
             newCol = newCol.replace("/", "O")
+            newCol = newCol.replace(">", "Gt")
             newCol = newCol.replace(".0", "")
             newCol = newCol.replace("+", "Plus")
+            if("Gt" in newCol): 
+                doFilter=True
 
-            file = file.Define(newCol,defn)
+            # if creation of new variable: just Define
+            # if selection: filter and define. Filter does not work with x/10, it needs a bool or a comparison
+            if doFilter:
+                file = file.Filter(defn).Define(newCol,defn)
+            else:
+                file = file.Define(newCol,defn)    
             colNames.push_back(newCol)
 
         if len(colNames)>0:
