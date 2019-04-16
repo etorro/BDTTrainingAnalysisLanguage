@@ -1,6 +1,6 @@
 # Executor and code for the ntup input files
 import RDFlib.RDFEventStream
-
+from clientlib.ast_util import lambda_unwrap
 import pandas as pd
 import uproot
 import ast
@@ -27,8 +27,9 @@ class query_ast_visitor(ast.NodeVisitor):
         node - if the node has a rep, just return
 
         '''
+
         if hasattr(node, 'rep'):
-            return
+            return node.rep
         else:
             return ast.NodeVisitor.visit(self, node)
 
@@ -38,6 +39,7 @@ class query_ast_visitor(ast.NodeVisitor):
 
         node - If the node has a rep, do not visit it.
     '''
+
         if hasattr(node, 'rep'):
             return
         else:
@@ -47,6 +49,7 @@ class query_ast_visitor(ast.NodeVisitor):
         r'''Return the rep for the node. If it isn't set yet, then run our visit on it.
         node - The ast node to generate a representation for.
         '''
+
         if not hasattr(node, 'rep'):
             self.visit(node)
         return node.rep
@@ -95,7 +98,9 @@ class query_ast_visitor(ast.NodeVisitor):
             raise BaseException("Binary operator {0} is not implemented.".format(type(node.op)))
 
         # Cache the result to push it back further up.
+        node.rep = r
         self._result = r
+        return node.rep
 
     def visit_Num(self, node):
         node.rep = node.n
@@ -109,15 +114,20 @@ class query_ast_visitor(ast.NodeVisitor):
         'Visiting a name - which should represent something'
         name_node.rep = self.resolve_id(name_node.id)
 
+
     def visit_Compare(self, node):
         ops = node.ops
         comps = node.comparators
-
         # simplest case: one single comparison
         if len(comps) == 1:
+            #op = self.translate_In(ops[0])
             op = ops[0]
             binop = ast.BinOp(op=op, left=node.left, right=comps[0])
+            node.rep = self.visit(binop)
+            #node.rep = self._result
             return self.visit(binop)
+        else:
+            raise BaseException("Do not know how to call at " + type(node.func).__name__)
 
     def visit_Call(self, call_node):
         r'''
@@ -130,6 +140,12 @@ class query_ast_visitor(ast.NodeVisitor):
             self.visit_Call_Member(call_node)
         elif type(call_node.func) is ast.Attribute:
             self.visit_Call_Member(call_node)
+            for arg in call_node.args:
+                self.visit(arg)
+            if call_node.func.attr == "Where":
+                new_call = Where(source=call_node.func.value, filter_lambda=call_node.args[0])
+                return new_call
+            return call_node
         else:
             raise BaseException("Do not know how to call at " + type(call_node.func).__name__)
         call_node.rep = self._result
@@ -198,6 +214,20 @@ class query_ast_visitor(ast.NodeVisitor):
         node.rep += '.flatten()'
 
 
+    def visit_Where(self, node):
+        'Apply a filtering to the current loop.'
+        s_rep = self.get_rep(node.source)
+
+        # Simulate the filtering call - we want the resulting value to test.
+        filter = lambda_unwrap(node.filter)
+        c = ast.Call(func=filter, args=[node.source])
+        rep = self.get_rep(c)
+        r = str(s_rep) + "*(" +  str(rep)  + ")"
+
+        node.rep = r
+        self._result = r
+        return node.rep
+
 class ntup_executor:
     def __init__(self, dataset_source):
         self.dataset_source = dataset_source
@@ -243,19 +273,29 @@ class ntup_executor:
             if existingVar==0:
                 defNames.push_back(var)
 
+
         output_file = "skimmed.root"   
         doFilter=False
+        #all this naming needs fixing
+        #also the flag doFilter is not well defined
         for defn in defNames:
             newCol = defn
             newCol = newCol.replace("/", "O")
             newCol = newCol.replace(">", "Gt")
             newCol = newCol.replace(".0", "")
             newCol = newCol.replace("+", "Plus")
+            newCol = newCol.replace("*", "times")
+            newCol = newCol.replace("(", "where")
+            newCol = newCol.replace(")", "")
+
             if("Gt" in newCol): 
                 doFilter=True
-
+            if("where" in newCol):
+                # Filter only works for event-level variables. Need to find a better way to decide if doFilter
+                doFilter=False
             # if creation of new variable: just Define
-            # if selection: filter and define. Filter does not work with x/10, it needs a bool or a comparison
+            # if selection: filter and defn. Filter does not work with x/10, it needs a bool or a comparison
+            #file = file.Define(newCol,defn)
             if doFilter:
                 file = file.Filter(defn).Define(newCol,defn)
             else:
