@@ -1,6 +1,7 @@
 # Executor and code for the ntup input files
 import RDFlib.RDFEventStream
-
+from clientlib.query_ast import Where
+from clientlib.ast_util import lambda_unwrap
 import pandas as pd
 import uproot
 import ast
@@ -28,9 +29,9 @@ class query_ast_visitor(ast.NodeVisitor):
 
         '''
         if hasattr(node, 'rep'):
-            return
+            return node.rep
         else:
-            return ast.NodeVisitor.visit(self, node)
+           return ast.NodeVisitor.visit(self, node)
 
     def generic_visit(self, node):
         '''Visit a generic node. If the node already has a rep, then it has been
@@ -78,11 +79,54 @@ class query_ast_visitor(ast.NodeVisitor):
         # method name we are going to be calling against.
         calling_against = self.get_rep(call_node.value) 
         attr_name = call_node.attr 
+        call_node.rep =attr_name
         self._result = attr_name
+
+    def visit_BinOp(self, node):
+        lhs = self.get_rep(node.left)
+        rhs = self.get_rep(node.right)
+
+        if type(node.op) is ast.Add:
+            r = str(lhs) + "+" +  str(rhs)
+        elif type(node.op) is ast.Div:
+            r = str(lhs) + "/" +  str(rhs)
+        elif type(node.op) is ast.Gt:
+            r = str(lhs) + ">" +  str(rhs)
+        elif type(node.op) is ast.Lt:
+            r = str(lhs) + "<" +  str(rhs)
+        else:
+            raise BaseException("Binary operator {0} is not implemented.".format(type(node.op)))
+
+        # Cache the result to push it back further up.
+        node.rep = r
+        self._result = r
+        return node.rep
+
+    def visit_Num(self, node):
+        node.rep = node.n
+        self._result = node.rep
+
+    def visit_Str(self, node):
+        node.rep = node.s
+        self._result = node.rep
 
     def visit_Name(self, name_node):
         'Visiting a name - which should represent something'
         name_node.rep = self.resolve_id(name_node.id)
+
+
+    def visit_Compare(self, node):
+        ops = node.ops
+        comps = node.comparators
+        # base case: we have something like a CMP b
+        if len(comps) == 1:
+            op = ops[0]
+            binop = ast.BinOp(op=op, left=node.left, right=comps[0])
+            node.rep = self.visit(binop)
+            #node.rep = self._result
+            return self.visit(binop)
+        else:
+            raise BaseException("Compare has more than 1 comparator")
 
 
     def visit_Call(self, call_node):
@@ -96,9 +140,32 @@ class query_ast_visitor(ast.NodeVisitor):
             self.visit_Call_Member(call_node)
         elif type(call_node.func) is ast.Attribute:
             self.visit_Call_Member(call_node)
+            for arg in call_node.args:
+                self.visit(arg)
+            if call_node.func.attr == "Where":
+                new_call = Where(source=call_node.func.value, filter_lambda=call_node.args[0])
+                return new_call
+            return call_node
         else:
             raise BaseException("Do not know how to call at " + type(call_node.func).__name__)
         call_node.rep = self._result
+
+
+    def visit_Subscript(self, node):
+        'Index into an array. Check types, as tuple indexing can be very bad for us'
+        v = self.get_rep(node.value)
+        if type(v) is not tuple:
+            raise BaseException("Do not know how to take the index of type '{0}'".format(type(v_rep)))
+        index = self.get_rep(node.slice)
+        # TODO: extract the type from the expression
+        node.rep = v[index]
+        self._result = node.rep
+
+    def visit_Index(self, node):
+        'We can only do single items, we cannot do slices yet'
+        v = self.get_rep(node.value)
+        node.rep = v
+        self._result = node
 
     def visit_Tuple(self, tuple_node):
         r'''
@@ -164,6 +231,32 @@ class query_ast_visitor(ast.NodeVisitor):
         node.rep += '.flatten()'
 
 
+    def visit_Where(self, node):
+        'Apply a filtering to the current loop.'
+
+        self.source = node.source
+        self.filter = node.filter
+        self._fields = ('source', 'filter')
+
+        # Make sure we are in a loop
+        s_rep = self.get_rep(node.source)
+
+        # Simulate the filtering call - we want the resulting value to test.
+        filter = lambda_unwrap(node.filter)
+        c = ast.Call(func=filter, args=[node.source])
+        rep = self.get_rep(c)
+
+        if type(s_rep) is not tuple:
+            r = str(s_rep) + "[" +  str(rep)  + "]"
+        else:
+            r = ROOT.std.vector("string")()
+            for element in s_rep:
+                r.push_back(str(element) + "[" +  str(rep)  + "]")
+
+        node.rep = r
+        self._result = r
+        return node.rep
+
 class ntup_executor:
     def __init__(self, dataset_source):
         self.dataset_source = dataset_source
@@ -187,36 +280,75 @@ class ntup_executor:
         data_pathname = self.dataset_source
         
         # open the input root file
-        # need to change this so that tree name is read from RDF_example.py
+        # need to change to read tree name from RDF_example.py
         RDF = ROOT.ROOT.RDataFrame
         file = RDF("recoTree", data_pathname)
 
-        # colNames contains the name of existing branches that will be passed to the output file
-        # defNames contains the name of new branches to be Defined in RDF
+        # colNames contains the names of existing branches that will be passed to the output file
+        # defNames contains the names of new branches to be Defined in RDF
         colNames = ROOT.std.vector("string")()
         defNames = ROOT.std.vector("string")()
- 
-        for col in file.GetColumnNames():
-            if col == ast_node.rep:
-                colNames.push_back(ast_node.rep)
-                
-        if (len(colNames)==0):
-            defNames.push_back(ast_node.rep)
 
-        output_file = "skimmed.root"    
+        list = (ast_node.rep,)
+        if type(ast_node.rep)==tuple:
+            list=ast_node.rep
+
+    # need to do a proper loop here!
+        for var in list:
+            existingVar = 0
+            for col in file.GetColumnNames():
+                if col == var:
+                    existingVar = 1
+                    colNames.push_back(var)
+            if existingVar==0:
+                if(type(var) is not ROOT.std.vector("string")):
+                    defNames.push_back(var)
+                else:
+                    for var_tup in var:
+                        existingVar = 0
+                        for col_tup in file.GetColumnNames():
+                            if col_tup == var_tup:
+                                existingVar = 1
+                                colNames.push_back(var_tup)
+                        if existingVar==0:
+                            defNames.push_back(var_tup)
+
+        output_file = "skimmed.root"
+        doFilter=False
+        #all this naming needs fixing
+        #also the flag doFilter is not well defined
+        doflatten=False
         for defn in defNames:
             newCol = defn
             newCol = newCol.replace("/", "O")
-            newCol = newCol.replace(".0", "")
+            newCol = newCol.replace(">", "Gt")
+            newCol = newCol.replace("<", "Lt")
+            newCol = newCol.replace(".", "")
+            newCol = newCol.replace("+", "Plus")
+            newCol = newCol.replace("*", "times")
+            newCol = newCol.replace(".flatten()", "flat")
+            newCol = newCol.replace("[", "where")
+            newCol = newCol.replace("]", "")
 
-            file = file.Define(newCol,defn)
+            if("Gt" in newCol and "where" not in newCol):
+                doFilter=True
+
+            # if creation of new variable: just Define
+            # if selection: filter and defn.
+            if("flatten" in defn):
+                defn = defn.replace(".flatten()", "")
+                doflatten=True
+            if doFilter:
+                file = file.Filter(defn).Define(newCol,defn)
+            else:
+                file = file.Define(newCol,defn)
             colNames.push_back(newCol)
 
-        # output tree to be read as pandas df. Take a snapshot in RDF with the branches we need
         if len(colNames)>0:
             file.Snapshot("recoTree", output_file, colNames)
             data_file = uproot.open(output_file)
-            ast_node.rep = data_file["recoTree"].pandas.df()
+            ast_node.rep = data_file["recoTree"].pandas.df(flatten=doflatten)
+            #ast_node.rep = data_file["recoTree"].pandas.df(flatten=True)
             data_file._context.source.close()
 
         os.remove(output_file)
