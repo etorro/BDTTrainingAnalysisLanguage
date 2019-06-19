@@ -3,8 +3,8 @@
 # This is one mechanism to allow for a leaky abstraction.
 import ast
 from cpplib.cpp_vars import unique_name
-from cpplib.cpp_representation import cpp_expression
-import xAODlib.statement as statements
+from cpplib.cpp_representation import cpp_value
+import RDFlib.statement as statements
 
 # The list of methods and the re-write functions for them. Each rewrite function
 # is called with the Call node, which includes arguments, names, etc. It should return
@@ -44,6 +44,7 @@ class CPPCodeValue (ast.AST):
         self.result = None
 
         # Representation to use for the resulting variable. Includes C++ type information.
+        # A lambda that takes teh scope as an argument and returns a cpp variable to hold things.
         self.result_rep = None
 
         # We have no further fields for the ast machinery to explore, so this is empty for now.
@@ -72,7 +73,6 @@ class cpp_ast_finder(ast.NodeTransformer):
         # Make sure all parts of this AST are visited properly before we attempt to
         # understand the call.
         self.generic_visit(node)
-
         # Examine the func to see if this is a member call.
         func = node.func
         if (type(func) is ast.Attribute) and (type(func.value) is ast.Name):
@@ -83,17 +83,15 @@ class cpp_ast_finder(ast.NodeTransformer):
             ok, new_node = self.try_call(func.id, node)
             if ok:
                 return new_node
-
         return node
 
-def process_ast_node(visitor, gc, current_loop_value, call_node):
+def process_ast_node(visitor, gc, call_node):
     r'''Inject the proper code into the output stream to deal with this C++ code.
     
     We expect this to be run on the back-end of the system.
 
     visitor - The node visitor that is converting the code into C++
     gc - the generated code object that we fill with actual code
-    current_loop_variable - the thing we are currently iterating over
     call_node - a Call ast node, with func being a CPPCodeValue.
 
     Result:
@@ -102,8 +100,8 @@ def process_ast_node(visitor, gc, current_loop_value, call_node):
 
     # We write everything into a new scope to prevent conflicts. So we have to declare the result ahead of time.
     cpp_ast_node = call_node.func
-    result_rep = cpp_ast_node.result_rep
-    result_rep.set_scope(gc.current_scope())
+    result_rep = cpp_ast_node.result_rep(gc.current_scope())
+
     gc.declare_variable(result_rep)
 
     # Include files
@@ -114,12 +112,15 @@ def process_ast_node(visitor, gc, current_loop_value, call_node):
     # against, if any.
     repl_list = []
     if cpp_ast_node.replacement_instance_obj is not None:
-        repl_list += [(cpp_ast_node.replacement_instance_obj[0], visitor.resolve_id(cpp_ast_node.replacement_instance_obj[1]).rep.name())]
+        repl_list += [(cpp_ast_node.replacement_instance_obj[0], visitor.resolve_id(cpp_ast_node.replacement_instance_obj[1]).rep.as_cpp())]
 
     # Process the arguments that are getting passed to the function
+    
     for arg,dest in zip(cpp_ast_node.args, call_node.args):
         rep = visitor.get_rep(dest)
-        repl_list += [(arg, rep.as_cpp())]
+        if type(rep) == str:
+            var = visitor._gc.declare_class_variable('float')
+        repl_list += [(arg, var.as_cpp())]
 
     # Emit the statements.
     blk = statements.block()
@@ -132,7 +133,7 @@ def process_ast_node(visitor, gc, current_loop_value, call_node):
         blk.add_statement(statements.arbitrary_statement(l))
 
     # Set the result and close the scope
-    blk.add_statement(statements.set_var(result_rep, cpp_expression(cpp_ast_node.result, gc.current_scope())))
+    blk.add_statement(statements.set_var(result_rep, cpp_value(cpp_ast_node.result, gc.current_scope(), result_rep.cpp_type())))
     gc.pop_scope()
 
     return result_rep
