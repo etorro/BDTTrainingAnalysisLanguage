@@ -33,33 +33,6 @@ output = events.Select('lambda e: (e.CalibJet_eta, e.CalibJet_phi, e.Track_eta, 
     .Select('lambda t1: compute_mindR(t1[0], t1[1], t1[2], t1[3])') \
     .value()
 
-#output = events.Select('lambda e: (e.event_HTMiss, e.event_NJets)') \
-#    .Select('lambda t1: mindR(t1[0], t1[1], t1[2], t1[3])') \
-#    .value()
-
-#output = events.Select('lambda e: (e.runNumber, e.eventNumber, e.event_HTMiss, e.event_NJets)') \
-#    .Select('lambda t1: mindR(t1[0], t1[1], t1[2], t1[3])') \
-#    .value()
-
-#output = events.Select('lambda e: (e.CalibJet_eta, e.CalibJet_phi, e.Track_eta, e.Track_phi)') \
-#    .Where('lambda t1: DeltaR(t1[0], t1[1], t1[2], t1[3])') \
-#    .value()
-
-#output = events.Select('lambda e: (e.eventNumber, e.CalibJet_pT, e.CalibJet_eta, e.CalibJet_phi, e.Track_pT, e.Track_eta, e.Track_phi)') \
-#    .Select('lambda e1: (e1[0], (e1[1], e1[2], e1[3]).Where(lambda t: t[0] > 40.0), (e1[4], e1[5],e1[6]).Where(lambda t: t[0] > 2.0))') \
-#    .Where('lambda t1: mindR(t1[2], t1[3], t1[5], t1[6])') \
-#    .value()
-
-
-#    .Where('lambda t1: DeltaR(t1.eta(), t1.phi(), jInfo[1].eta(), jInfo[1].phi()) < 0.2)') \
-
-##output = events.Select('lambda e: (e.eventNumber, e.CalibJet_pT, e.CalibJet_eta)') \
-##   .Select('lambda e1: (e1[0], (e1[1], e1[2]).Where(lambda t: (t[0] > 40.0 and t[1]<2.5)))') \
-##    .value()
-
-
-#output = events.Select('lambda e: (e.eventNumber, e.Track_pT)').SelectMany('lambda e1: e1[1]').value()
-
 
 
 
