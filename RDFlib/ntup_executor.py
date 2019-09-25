@@ -392,7 +392,7 @@ class ntup_executor:
             newCol = newCol.replace("[", "where")
             newCol = newCol.replace("]", "")
 
-            if("Gt" in newCol and "where" not in newCol): 
+            if("Gt" in newCol): 
                 doFilter=True
 
             # if creation of new variable: just Define
