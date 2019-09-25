@@ -1,13 +1,24 @@
 # Executor and code for the ntup input files
+from RDFlib.generated_code import generated_code
 import RDFlib.RDFEventStream
 from clientlib.query_ast import Where
 from clientlib.ast_util import lambda_unwrap
+import cpplib.cpp_ast as cpp_ast
+from cpplib.cpp_vars import unique_name
+import cpplib.cpp_types as ctyp
+from cpplib.cpp_functions import find_known_functions, function_ast
+
+from cpplib.math_utils import mindRAst
+
 import pandas as pd
 import uproot
 import ast
 import os, sys
 from pprint import pprint
 import ROOT
+
+
+
 
 class query_ast_visitor(ast.NodeVisitor):
     r"""
@@ -18,6 +29,7 @@ class query_ast_visitor(ast.NodeVisitor):
         Initialize the visitor.
         '''
         # Tracks the output of the code.
+        self._gc = generated_code()
         self._var_dict = {}
         self._result = None
 
@@ -31,7 +43,7 @@ class query_ast_visitor(ast.NodeVisitor):
         if hasattr(node, 'rep'):
             return node.rep
         else:
-           return ast.NodeVisitor.visit(self, node)
+            return ast.NodeVisitor.visit(self, node)
 
     def generic_visit(self, node):
         '''Visit a generic node. If the node already has a rep, then it has been
@@ -79,21 +91,21 @@ class query_ast_visitor(ast.NodeVisitor):
         # method name we are going to be calling against.
         calling_against = self.get_rep(call_node.value) 
         attr_name = call_node.attr 
-        call_node.rep =attr_name
+        call_node.rep =attr_name 
         self._result = attr_name
 
     def visit_BinOp(self, node):
         lhs = self.get_rep(node.left)
         rhs = self.get_rep(node.right)
-
+        
         if type(node.op) is ast.Add:
-            r = str(lhs) + "+" +  str(rhs)
+            r = str(lhs) + "+" +  str(rhs) 
         elif type(node.op) is ast.Div:
             r = str(lhs) + "/" +  str(rhs)
         elif type(node.op) is ast.Gt:
-            r = str(lhs) + ">" +  str(rhs)
+            r = str(lhs) + ">" +  str(rhs)   
         elif type(node.op) is ast.Lt:
-            r = str(lhs) + "<" +  str(rhs)
+            r = str(lhs) + "<" +  str(rhs)   
         else:
             raise BaseException("Binary operator {0} is not implemented.".format(type(node.op)))
 
@@ -110,24 +122,23 @@ class query_ast_visitor(ast.NodeVisitor):
         node.rep = node.s
         self._result = node.rep
 
-    def visit_Name(self, name_node):
+    def visit_Name(self, node):
         'Visiting a name - which should represent something'
-        name_node.rep = self.resolve_id(name_node.id)
+        node.rep = self.resolve_id(node.id)
 
-
+        self._result = node.rep
+        return node.rep
+          
     def visit_Compare(self, node):
         ops = node.ops
         comps = node.comparators
-        # base case: we have something like a CMP b
         if len(comps) == 1:
             op = ops[0]
             binop = ast.BinOp(op=op, left=node.left, right=comps[0])
             node.rep = self.visit(binop)
-            #node.rep = self._result
             return self.visit(binop)
         else:
-            raise BaseException("Compare has more than 1 comparator")
-
+            raise BaseException("Compare operator {0} is not len 1.".format(type(node.op)))
 
     def visit_Call(self, call_node):
         r'''
@@ -136,6 +147,10 @@ class query_ast_visitor(ast.NodeVisitor):
         # What kind of a call is this?
         if type(call_node.func) is ast.Lambda:
             self.visit_Call_Lambda(call_node)
+        elif type(call_node.func) is cpp_ast.CPPCodeValue:
+            self._result = cpp_ast.process_ast_node(self, self._gc, call_node)
+        elif type(call_node.func) is function_ast:
+            self._result = self.visit_function_ast(call_node)    
         elif type(call_node.func) is ast.BinOp:
             self.visit_Call_Member(call_node)
         elif type(call_node.func) is ast.Attribute:
@@ -145,19 +160,58 @@ class query_ast_visitor(ast.NodeVisitor):
             if call_node.func.attr == "Where":
                 new_call = Where(source=call_node.func.value, filter_lambda=call_node.args[0])
                 return new_call
-            return call_node
+            return call_node 
+        elif type(call_node.func) is ast.Name:
+            self.visit_Name(call_node.func)
+            for arg in call_node.args:
+                self.visit(arg)
+            if call_node.func.id == "newmindR":
+                s_rep = self.visit_minDR(call_node)
+                self._result = s_rep
+                return s_rep
         else:
             raise BaseException("Do not know how to call at " + type(call_node.func).__name__)
         call_node.rep = self._result
 
+    def visit_minDR(self, node):
+        'Apply a filtering to the current loop.'
+        'list of attributes: eta1, phi1, eta2, phi2'
+        if type(node.args[0]) is ast.Attribute:
+            eta1 = node.args[0].attr
+            phi1 = node.args[1].attr
+            eta2 = node.args[2].attr
+            phi2 = node.args[3].attr
+        elif type(node.args[0]) is ast.Subscript:
+            s_rep_all = self.visit_Name(node.args[0].value)  
+            eta1 = s_rep_all[0] 
+            phi1 = s_rep_all[1] 
+            eta2 = s_rep_all[2]
+            phi2 = s_rep_all[3]
+            
+        s_rep = "double mind=1000; vector<double> mdR;" 
+        s_rep += " for(int i=0; i<" + eta1 + ".size();i++){"
+        s_rep += "     mind=1000; "
+        s_rep += "     for(int j=0; j<" + eta2 + ".size();j++) { "
+        s_rep += "         double deta = " + eta1 + "[i]-" + eta2 + "[j]; "
+        s_rep += "         double dphi = " + phi1 + "[i]-" + phi2 + "[j]; "
+        s_rep += "         if(dphi>M_PI) dphi -= 2*M_PI; "
+        s_rep += "         else if(dphi<-M_PI) dphi += 2*M_PI; "
+        s_rep += "         double r2=deta*deta+dphi*dphi;  "
+        s_rep += "         if(r2<mind){mind=r2; } } "
+        s_rep += " mdR.push_back(sqrt(mind));} "
+        s_rep += " return mdR;"
 
+        node.rep = s_rep
+        return node.rep
+
+    
     def visit_Subscript(self, node):
         'Index into an array. Check types, as tuple indexing can be very bad for us'
         v = self.get_rep(node.value)
         if type(v) is not tuple:
             raise BaseException("Do not know how to take the index of type '{0}'".format(type(v_rep)))
         index = self.get_rep(node.slice)
-        # TODO: extract the type from the expression
+
         node.rep = v[index]
         self._result = node.rep
 
@@ -170,7 +224,6 @@ class query_ast_visitor(ast.NodeVisitor):
     def visit_Tuple(self, tuple_node):
         r'''
         Process a tuple. We visit each component of it, and build up a representation from each result.
-
         See github bug #21 for the special case of dealing with (x1, x2, x3)[0].
         '''
         tuple_node.rep = tuple(self.get_rep(e) for e in tuple_node.elts)
@@ -231,13 +284,15 @@ class query_ast_visitor(ast.NodeVisitor):
         node.rep += '.flatten()'
 
 
+    
+
     def visit_Where(self, node):
         'Apply a filtering to the current loop.'
 
-        self.source = node.source
+        self.source = node.source    
         self.filter = node.filter
         self._fields = ('source', 'filter')
-
+        
         # Make sure we are in a loop
         s_rep = self.get_rep(node.source)
 
@@ -266,6 +321,9 @@ class ntup_executor:
         Run through all the transformations that we have on tap to be run on the client side.
         Return a (possibly) modified ast.
         '''
+        # Any C++ custom code needs to be threaded into the ast
+        ast = cpp_ast.cpp_ast_finder().visit(ast)
+        # And return the modified ast
         return ast
 
 
@@ -274,7 +332,6 @@ class ntup_executor:
         Evaluate the ast over the file that we have been asked to run over
         """
         # Visit the AST to generate the code
-        #Output: ast_node.rep, a string with the name of the branches to be included in a new root file.
         qv = query_ast_visitor()
         qv.visit(ast_node)
         data_pathname = self.dataset_source
@@ -282,7 +339,7 @@ class ntup_executor:
         # open the input root file
         # need to change to read tree name from RDF_example.py
         RDF = ROOT.ROOT.RDataFrame
-        file = RDF("recoTree", data_pathname)
+        file   = RDF("recoTree", data_pathname)
 
         # colNames contains the names of existing branches that will be passed to the output file
         # defNames contains the names of new branches to be Defined in RDF
@@ -292,9 +349,9 @@ class ntup_executor:
         list = (ast_node.rep,)
         if type(ast_node.rep)==tuple:
             list=ast_node.rep
-
+   
     # need to do a proper loop here!
-        for var in list:
+        for var in list:    
             existingVar = 0
             for col in file.GetColumnNames():
                 if col == var:
@@ -302,24 +359,29 @@ class ntup_executor:
                     colNames.push_back(var)
             if existingVar==0:
                 if(type(var) is not ROOT.std.vector("string")):
+                    # var is a str, not a vector of str
                     defNames.push_back(var)
                 else:
-                    for var_tup in var:
+                    for var_tup in var: 
                         existingVar = 0
                         for col_tup in file.GetColumnNames():
                             if col_tup == var_tup:
                                 existingVar = 1
                                 colNames.push_back(var_tup)
-                        if existingVar==0:
-                            defNames.push_back(var_tup)
+                        if existingVar==0:  
+                            defNames.push_back(var_tup) 
 
-        output_file = "skimmed.root"
+        output_file = "skimmed.root"   
         doFilter=False
         #all this naming needs fixing
         #also the flag doFilter is not well defined
         doflatten=False
         for defn in defNames:
-            newCol = defn
+            #newCol is the name of the new branch
+            if(defn.find('double') >-1):
+                 newCol = "minDR"
+            else:
+                 newCol = defn
             newCol = newCol.replace("/", "O")
             newCol = newCol.replace(">", "Gt")
             newCol = newCol.replace("<", "Lt")
@@ -330,27 +392,29 @@ class ntup_executor:
             newCol = newCol.replace("[", "where")
             newCol = newCol.replace("]", "")
 
-            if("Gt" in newCol and "where" not in newCol):
+            if("Gt" in newCol and "where" not in newCol): 
                 doFilter=True
 
             # if creation of new variable: just Define
-            # if selection: filter and defn.
-            if("flatten" in defn):
-                defn = defn.replace(".flatten()", "")
-                doflatten=True
+            # if selection: filter and defn. Filter does not work with x/10, it needs a bool or a comparison
+            #file = file.Define(newCol,defn)
+            if("flatten" in defn): 
+                defn = defn.replace(".flatten()", "")   
+                doflatten=True 
             if doFilter:
                 file = file.Filter(defn).Define(newCol,defn)
             else:
-                file = file.Define(newCol,defn)
+                defn = defn.replace("compute_mindR", "")   
+                file = file.Define(newCol,defn) 
+            
+                
             colNames.push_back(newCol)
+
 
         if len(colNames)>0:
             file.Snapshot("recoTree", output_file, colNames)
             data_file = uproot.open(output_file)
             ast_node.rep = data_file["recoTree"].pandas.df(flatten=doflatten)
-            #ast_node.rep = data_file["recoTree"].pandas.df(flatten=True)
             data_file._context.source.close()
-
-        os.remove(output_file)
 
         return ast_node.rep #pandas df containing the result

@@ -66,3 +66,21 @@ class Where(ast.AST):
         self.source = source
         self.filter = filter_lambda
         self._fields = ('source', 'filter')
+
+#class minDR(ast.AST):
+#   r'''
+#    AST node for filtering: Where. Filters input, only allowing parts of the sequence that
+#    satisfy the operator to move on.
+#    '''
+
+#    def __init__ (self, filter_lambda):
+#        r'''
+#        Initialize an AST node that represents a filter operation (Where). As input takes
+#        an iterator and only lets through items in the sequence that pass the `filter_lambda`
+#        criteria.
+
+#        source - An AST that represents the source sequence.
+#        filter_lambda - a filter function to be applied to the sequence.
+#        '''
+#        self.filter = filter_lambda
+#        self._fields = ('filter')
