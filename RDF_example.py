@@ -40,7 +40,7 @@ output = events.Select('lambda e: (e.L1_tauRoI_E, e.L1_tauRoI_eta, e.L1_tauRoI_p
     .value()
 
 #output = events.Select('lambda e: (e.L1_tauRoI_E, e.L1_tauRoI_eta, e.L1_tauRoI_phi, e.L1_emRoI_eta, e.L1_emRoI_phi, e.event_L1_tauRoIsize>0, e.event_L1_emRoIsize>0, e.event_passL1_LLPNM)') \
-#    .Select('lambda r1: ((r1[0], newmindR(r1[1], r1[2], r1[3], r1[4])).Where(lambda t1: (t1[0] > 30.0), t1[1]>0), r1[5], r1[6], r1[7])') \
+#    .Select('lambda r1: ((r1[0], newmindR(r1[1], r1[2], r1[3], r1[4])).Where(lambda t1: (t1[1]>0)), r1[5], r1[6], r1[7])') \
 #    .value()
 
 
